@@ -88,12 +88,11 @@ try:
     ctx_pct = cw.get('used_percentage')
     ctx_size = cw.get('context_window_size')
     cu = cw.get('current_usage')
+    ctx_tokens = None
     if isinstance(cu, dict):
-        ctx_tokens = sum(cu.get(k) or 0 for k in ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'))
-    elif ctx_pct is not None and ctx_size:
+        ctx_tokens = sum(cu.get(k) or 0 for k in ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')) or None
+    if ctx_tokens is None and ctx_pct is not None and ctx_size:
         ctx_tokens = round(ctx_pct * ctx_size / 100)
-    else:
-        ctx_tokens = None
     model = data.get('model', {}).get('display_name') or data.get('model', {}).get('id')
     rl = data.get('rate_limits', {})
     rl5h_pct    = rl.get('five_hour', {}).get('used_percentage') if isinstance(rl, dict) else None
@@ -128,9 +127,9 @@ BUDDY_OUTPUT=$(printf '%s' "$STDIN_DATA" | "$BUDDY_SCRIPT" 2>/dev/null)
 [ -z "$BUDDY_OUTPUT" ] && exit 0
 
 # No context data → pass buddy output through unchanged
-HAS_DATA=$(python3 -c "
-import json, sys
-d = json.loads('''$STATS_JSON''' or '{}')
+HAS_DATA=$(STATS_JSON="$STATS_JSON" python3 -c "
+import json, os
+d = json.loads(os.environ.get('STATS_JSON') or '{}')
 print(d.get('has_data', False))
 " 2>/dev/null)
 
@@ -140,8 +139,12 @@ if [ "$HAS_DATA" != "True" ]; then
 fi
 
 # ── Merge stat lines into buddy output ──────────────────────────────────────
-printf '%s\n' "$BUDDY_OUTPUT" | STATS_JSON="$STATS_JSON" python3 -c "
-import sys, json, os
+# merge_stats <buddy output> <mode>: 'merge' places each stat line left of the
+# buddy panel and exits 3 when one does not fit; 'stats' prints the stat lines
+# alone, sized to the panel's width.
+merge_stats() {
+printf '%s\n' "$1" | STATS_JSON="$STATS_JSON" MERGE_MODE="$2" python3 -c "
+import sys, json, os, re
 
 BRAILLE = '⠀'
 GREEN   = '\033[32m'
@@ -203,6 +206,7 @@ def fmt_countdown(resets_at):
     m = rem // 60
     if d:    return f' {d}d{h}h'
     if h:    return f' {h}h{m:02d}m'
+    if secs < 60: return ' <1m'
     return f' {m}m'
 
 def make_bar_line(label, pct, countdown=''):
@@ -223,16 +227,15 @@ SPARK = '▁▂▃▄▅▆▇█'
 MAX_TURNS = 12
 
 def fmt_tokens(n):
+    # Half-up rounding throughout; one decimal below 10k and from 1M, never '.0'.
     a = abs(n)
-    if a >= 999500:
-        s = f'{a / 1e6:.1f}'.rstrip('0').rstrip('.') + 'M'
-    elif a >= 10000:
-        s = f'{round(a / 1000)}k'
-    elif a >= 1000:
-        s = f'{a / 1000:.1f}k'
-    else:
-        s = str(a)
-    return s
+    if a < 1000:
+        return str(a)
+    if a < 9950:
+        return f'{int(a / 100 + 0.5) / 10:.1f}'.rstrip('0').rstrip('.') + 'k'
+    if a < 999500:
+        return f'{int(a / 1000 + 0.5)}k'
+    return f'{int(a / 1e5 + 0.5) / 10:.1f}'.rstrip('0').rstrip('.') + 'M'
 
 def turn_samples(sid, tokens):
     sid = ''.join(ch for ch in sid if ch.isalnum() or ch in '_-')
@@ -308,8 +311,12 @@ if ctx_tokens:
             with_tokens[1] + 1 + len(spark) + 1 + len(delta),
         ))
 
-rl5h_text, rl5h_width = make_bar_line('5h',  rl5h_pct, fmt_countdown(rl5h_reset))
-rl7d_text, rl7d_width = make_bar_line('7d',  rl7d_pct, fmt_countdown(rl7d_reset))
+def limit_variants(label, pct, resets_at):
+    variants = [make_bar_line(label, pct)]
+    countdown = fmt_countdown(resets_at)
+    if countdown:
+        variants.insert(0, make_bar_line(label, pct, countdown))
+    return variants
 
 effort_tag   = f' [{effort[:3]}]' if effort else ''
 thinking_tag = ' ~' if thinking else ''
@@ -319,8 +326,8 @@ model_width  = len(model) + len(effort_tag) + len(thinking_tag)
 
 # Each item lists its renderings widest first; the first one that fits is used.
 stat_items = [ctx_variants]
-if rl5h_pct is not None: stat_items.append([(rl5h_text, rl5h_width)])
-if rl7d_pct is not None: stat_items.append([(rl7d_text, rl7d_width)])
+if rl5h_pct is not None: stat_items.append(limit_variants('5h', rl5h_pct, rl5h_reset))
+if rl7d_pct is not None: stat_items.append(limit_variants('7d', rl7d_pct, rl7d_reset))
 # Prompt-cache countdown after the model: time left before the next message
 # re-writes the whole context instead of reading it from cache.
 model_variants = [(model_text, model_width)]
@@ -332,7 +339,7 @@ if cache_left is not None:
     if cache_left <= 0:
         cache_plain, cache_color = 'cache COLD', RED
     else:
-        cache_plain = 'cache' + (fmt_countdown(time.time() + cache_left) if cache_left >= 60 else ' <1m')
+        cache_plain = 'cache' + (fmt_countdown(time.time() + cache_left) or ' <1m')
         cache_color = YELLOW if cache_left < 600 else DIM
     sep = '  ' if model else ''
     model_variants.insert(0, (
@@ -342,21 +349,53 @@ if cache_left is not None:
 stat_items.append(model_variants)
 
 lines = sys.stdin.read().splitlines()
-center = 1
+ANSI = re.compile(chr(27) + chr(92) + chr(91) + '[0-9;]*m')
+budget = max((len(ANSI.sub('', l)) for l in lines), default=0) - 1
 
+def alone(variants):
+    return BRAILLE + next((v for v in variants if v[1] <= budget), variants[-1])[0]
+
+if os.environ.get('MERGE_MODE') == 'stats':
+    print('\n'.join(alone(v) for v in stat_items if v[-1][0]))
+    sys.exit(0)
+
+# The panel is the leading run of spacer-prefixed lines. Stats start on its
+# second line when it is tall enough, otherwise on the first; stats that run
+# past its last line get lines of their own below it.
+panel = next((i for i, l in enumerate(lines) if not l.startswith(BRAILLE)), len(lines))
+center = 1 if panel > len(stat_items) else 0
+
+# A stat needs its own width plus one column of air before the panel.
+out, placed = [], 0
 for i, line in enumerate(lines):
     si = i - center
-    if 0 <= si < len(stat_items) and line.startswith(BRAILLE):
+    fit = None
+    if 0 <= si < len(stat_items) and i < panel:
         after_braille = line[1:]
         num_spaces = len(after_braille) - len(after_braille.lstrip(' '))
-        stat_text, stat_width = next(
-            (v for v in stat_items[si] if v[1] <= num_spaces), stat_items[si][-1])
-        if num_spaces >= stat_width:
-            remaining = ' ' * (num_spaces - stat_width)
-            rest = after_braille.lstrip(' ')
-            print(BRAILLE + stat_text + remaining + rest)
-        else:
-            print(line)
+        fit = next((v for v in stat_items[si] if v[1] < num_spaces), None)
+    if fit:
+        placed += 1
+        out.append(BRAILLE + fit[0] + ' ' * (num_spaces - fit[1]) + after_braille.lstrip(' '))
     else:
-        print(line)
+        out.append(line)
+    if i == panel - 1 and placed == panel - center:
+        overflow = stat_items[panel - center:]
+        out.extend(alone(v) for v in overflow)
+        placed += len(overflow)
+if placed < len(stat_items):
+    sys.exit(3)
+print('\n'.join(out))
 "
+}
+
+# Stats outrank the buddy: when a stat line does not fit beside the full panel,
+# retry beside the compact one (no speech bubble), then show the stats alone.
+MERGED=$(merge_stats "$BUDDY_OUTPUT" merge)
+if [ $? -eq 3 ]; then
+    COMPACT_OUTPUT=$(printf '%s' "$STDIN_DATA" | BUDDY_STATUSLINE_DENSITY=compact "$BUDDY_SCRIPT" 2>/dev/null)
+    MERGED=$(merge_stats "$COMPACT_OUTPUT" merge)
+    [ $? -eq 3 ] && MERGED=$(merge_stats "$BUDDY_OUTPUT" stats)
+fi
+[ -z "$MERGED" ] && MERGED="$BUDDY_OUTPUT"
+printf '%s\n' "$MERGED"

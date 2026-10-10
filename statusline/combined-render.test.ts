@@ -285,11 +285,13 @@ describe("combined statusline: rate-limit reset", () => {
     expect(statTexts(plain)).toEqual(["ctx  16% ██░░░░░░░░", MODEL_TEXT, "", ""]);
   });
 
-  // Found while writing these tests, not fixed here: fmt_countdown returns
-  // " 0m" for a reset less than 60 s away, so the 5h/7d line reads
-  // "5h  63% ██████░░░░ 0m" for the last minute of a window. The cache
-  // countdown special-cases the same range as "<1m".
-  test.todo("shows a sub-minute rate-limit countdown as something other than 0m");
+  test("shows a sub-minute rate-limit countdown as <1m", () => {
+    const rendered = renderLimits({
+      five_hour: { used_percentage: 63, resets_at: nowSeconds() + 30 },
+    });
+
+    expect(rendered.fiveHour).toBe("5h  63% ██████░░░░ <1m");
+  });
 });
 
 describe("combined statusline: width fallback", () => {
@@ -353,8 +355,10 @@ describe("combined statusline: width fallback", () => {
     return WIDTHS.map((columns) => {
       const result = runCombined(fixture, widthInput(311_000), columns);
       expect(result.status).toBe(0);
+      const hasBuddy = result.plain.includes(ART_ROWS[1]);
+      if (!hasBuddy) return { columns, hasBuddy, ctx: 0, model: 0, result };
       const [ctx, , , model] = statTexts(result.plain);
-      return { columns, ctx: ctxRank(ctx), model: modelRank(model), result };
+      return { columns, hasBuddy, ctx: ctxRank(ctx), model: modelRank(model), result };
     });
   }
 
@@ -381,18 +385,16 @@ describe("combined statusline: width fallback", () => {
     expect(result.raw).toContain(`${DIM}311k/1M${NC} ${GREEN}▄█${NC} ${DIM}+161k${NC}`);
   });
 
-  test("ctx line steps down full → tokens → base → dropped as the panel narrows", () => {
-    const rows = sweep();
-    const ranks = rows.map((row) => row.ctx);
+  test("ctx line steps down full → tokens → base while the buddy still fits", () => {
+    const ranks = sweep().filter((row) => row.hasBuddy).map((row) => row.ctx);
 
     expectNeverWidens(ranks);
-    expect(new Set(ranks)).toEqual(new Set([3, 2, 1, 0]));
+    expect(new Set(ranks)).toEqual(new Set([3, 2, 1]));
     expect(ranks[0]).toBe(3);
-    expect(ranks[ranks.length - 1]).toBe(0);
   }, SPAWN_TIMEOUT_MS);
 
   test("model line drops the cache countdown before the model name", () => {
-    const rows = sweep();
+    const rows = sweep().filter((row) => row.hasBuddy);
     const ranks = rows.map((row) => row.model);
 
     expectNeverWidens(ranks);
@@ -404,21 +406,97 @@ describe("combined statusline: width fallback", () => {
     }
   }, SPAWN_TIMEOUT_MS);
 
-  test("a stat that does not fit leaves the buddy line unchanged", () => {
-    const fixture = primedFixture();
-    const input = widthInput(311_000);
-    const combined = runCombined(fixture, input, 40);
-    const buddyOnly = run(buddyScript, fixture, input, 40);
+  test("5h and 7d lines drop their countdown before disappearing", () => {
+    const rows = sweep().filter((row) => row.hasBuddy);
+    const fiveHour = rows.map((row) => statTexts(row.result.plain)[1]);
 
-    expect(combined.status).toBe(0);
-    expect(buddyOnly.status).toBe(0);
-    expect(statTexts(combined.plain)[0]).toBe("");
+    expect(fiveHour[0]).toMatch(/^5h {2}63% ██████░░░░ 2h4[23]m$/);
+    expect(fiveHour).toContain("5h  63% ██████░░░░");
+    for (const text of fiveHour) expect(text.startsWith("5h  63% ██████░░░░")).toBe(true);
+  }, SPAWN_TIMEOUT_MS);
 
-    const combinedLines = combined.raw.split("\n");
-    const buddyLines = buddyOnly.raw.split("\n");
-    const ctxRow = combinedLines.findIndex((line) => line.includes(ART_ROWS[1]));
-    expect(ctxRow).toBeGreaterThanOrEqual(0);
-    expect(combinedLines[ctxRow]).toBe(buddyLines[ctxRow]);
-    expect(combinedLines.length).toBe(buddyLines.length);
+  test("every stat keeps one column of air before the art", () => {
+    for (const row of sweep().filter((candidate) => candidate.hasBuddy)) {
+      for (const line of row.result.plain.split("\n")) {
+        const marker = ART_ROWS.slice(1).find((candidate) => line.includes(candidate));
+        if (marker) expect(line[line.indexOf(marker) - 1]).toBe(" ");
+      }
+    }
+  }, SPAWN_TIMEOUT_MS);
+
+  test("when the stats do not fit beside the buddy, the stats are shown alone", () => {
+    const rows = sweep();
+    const narrow = rows.filter((row) => !row.hasBuddy);
+
+    // Once the buddy is gone it never comes back at a narrower width.
+    expect(narrow.length).toBeGreaterThan(0);
+    expect(rows.slice(rows.length - narrow.length)).toEqual(narrow);
+
+    for (const row of narrow) {
+      const lines = row.result.plain.split("\n").filter((line) => line !== "");
+      expect(lines.length).toBe(4);
+      for (const line of lines) expect(line.startsWith(BRAILLE)).toBe(true);
+      expect(lines[0].slice(1).startsWith(CTX_BASE)).toBe(true);
+      expect(lines[1].slice(1).startsWith("5h  63% ██████░░░░")).toBe(true);
+      expect(lines[2].slice(1).startsWith("7d  11% █░░░░░░░░░")).toBe(true);
+      expect(lines[3].slice(1).startsWith(MODEL_TEXT)).toBe(true);
+      expect(row.result.plain).not.toContain(WIDE_NAME);
+    }
+  }, SPAWN_TIMEOUT_MS);
+});
+
+describe("combined statusline: stats outrank the speech bubble", () => {
+  const BUBBLE_TEXT = "a fairly long remark from the buddy";
+
+  function bubbleFixture() {
+    const fixture = createFixture();
+    writeFileSync(
+      join(fixture.configDir, "buddy-state", "reaction.default.json"),
+      JSON.stringify({ reaction: BUBBLE_TEXT, timestamp: Date.now() }),
+    );
+    return fixture;
+  }
+
+  const input = () => baseInput({
+    rate_limits: { five_hour: { used_percentage: 63, resets_at: nowSeconds() + 9800 } },
+  });
+
+  test("a wide panel keeps the bubble next to the stats", () => {
+    const result = runCombined(bubbleFixture(), input(), 140);
+
+    expect(result.status).toBe(0);
+    expect(result.plain).toContain(BUBBLE_TEXT);
+    // statTexts cuts at the art marker, so the bubble border follows the stat.
+    expect(statTexts(result.plain)[0]).toMatch(/^ctx {2}16% ██░░░░░░░░ +\.-+\.$/);
+  });
+
+  test("a narrow panel drops the bubble, not the stats or the art", () => {
+    const fixture = bubbleFixture();
+    const buddyOnly = run(buddyScript, fixture, input(), 66);
+    const result = runCombined(fixture, input(), 66);
+
+    // The bubble alone would have fit at this width; the stats take its place.
+    expect(buddyOnly.plain).toContain("a fairly long");
+    expect(result.status).toBe(0);
+    expect(result.plain).not.toContain("a fairly long");
+    const [ctx, fiveHour, model] = statTexts(result.plain);
+    expect(ctx).toBe("ctx  16% ██░░░░░░░░");
+    expect(fiveHour).toMatch(/^5h {2}63% ██████░░░░/);
+    expect(model).toBe(MODEL_TEXT);
+  });
+});
+
+describe("combined statusline: hostile input", () => {
+  test("a backslash or quote in the model name does not blank the stats", () => {
+    const name = String.raw`Op\us "5" it's`;
+    const result = runCombined(createFixture(), {
+      context_window: { used_percentage: 16 },
+      model: { id: "x", display_name: name },
+    });
+
+    expect(result.status).toBe(0);
+    const [ctx, model] = statTexts(result.plain);
+    expect(ctx).toBe("ctx  16% ██░░░░░░░░");
+    expect(model).toBe(name);
   });
 });

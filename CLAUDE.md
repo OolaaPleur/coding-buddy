@@ -69,7 +69,8 @@ Beyond the ctx/5h/7d bars and the model name:
 - **ctx line**: tokens used / window (`56k/200k`; used = sum of the three `current_usage` fields, else derived from `used_percentage`), a sparkline of context size at the end of each of the last 12 turns, and the last turn's delta (`+3.2k`).
 - **model line**: prompt-cache countdown (`cache 47m`), yellow under 10 min, `cache COLD` in red once expired.
 - **5h / 7d bars**: show 0% once their `resets_at` has passed.
-- The ctx and model lines fall back to a narrower variant (dropping the extras) when the terminal is too narrow.
+- Every line falls back to a narrower variant (dropping the extras, then the 5h/7d countdown) when the panel is tight.
+- Stats outrank the buddy: if a line still does not fit, the panel is re-rendered compact (no speech bubble), and if that is not enough the stats are printed alone.
 
 ### Context history (`hooks/ctx-turn.sh`)
 

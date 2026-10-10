@@ -167,7 +167,7 @@ describe("combined statusline context history", () => {
     const first = render(fixture, usage(156_500));
 
     expect(first.pct).toBe("16");
-    expect(first.used).toBe("156k/1M");
+    expect(first.used).toBe("157k/1M");
     expect(first.spark).toBeUndefined();
     expect(first.delta).toBeUndefined();
     expect(first.line).not.toMatch(/[+-]\d/);
@@ -372,6 +372,19 @@ describe("combined statusline context history", () => {
     expect(readHistory(fixture).samples).toEqual([33_000]);
   });
 
+  test("falls back to the percentage when every current_usage counter is zero", () => {
+    const fixture = createFixture();
+
+    const rendered = render(fixture, {
+      used_percentage: 25,
+      context_window_size: 200_000,
+      current_usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    });
+
+    expect(rendered.used).toBe("50k/200k");
+    expect(readHistory(fixture).samples).toEqual([50_000]);
+  });
+
   test("shows no token count and writes no history when neither source is available", () => {
     const fixture = createFixture();
 
@@ -407,17 +420,22 @@ describe("combined statusline context history", () => {
 
   test.each([
     [950, 1_000_000, "950/1M"],
-    [1_000, 1_000_000, "1.0k/1M"],
+    // Never a trailing ".0", and no "10.0k" just below the 10k seam.
+    [1_000, 1_000_000, "1k/1M"],
+    [1_049, 1_000_000, "1k/1M"],
+    [1_050, 1_000_000, "1.1k/1M"],
     [1_500, 1_000_000, "1.5k/1M"],
-    [9_999, 1_000_000, "10.0k/1M"],
+    [9_949, 1_000_000, "9.9k/1M"],
+    [9_950, 1_000_000, "10k/1M"],
+    [9_999, 1_000_000, "10k/1M"],
     [10_000, 1_000_000, "10k/1M"],
-    // round() is banker's rounding: 156.5 -> 156, 157.5 -> 158.
-    [156_500, 1_000_000, "156k/1M"],
+    // Half-up, not banker's rounding: both .5 cases round away from zero.
+    [156_500, 1_000_000, "157k/1M"],
     [157_500, 1_000_000, "158k/1M"],
     [311_000, 1_000_000, "311k/1M"],
     [999_499, 2_000_000, "999k/2M"],
     [999_500, 2_000_000, "1M/2M"],
-    [1_250_000, 2_000_000, "1.2M/2M"],
+    [1_250_000, 2_000_000, "1.3M/2M"],
     [100_000, 200_000, "100k/200k"],
   ])("formats %i tokens of a %i window as %s", (tokens, size, expected) => {
     const fixture = createFixture();
