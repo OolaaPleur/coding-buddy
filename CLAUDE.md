@@ -39,7 +39,17 @@ Claude Code sends this JSON on stdin every `refreshInterval` seconds:
 
 ```json
 {
-  "context_window": { "used_percentage": 28 },
+  "session_id": "0b1c2d3e-...",
+  "context_window": {
+    "used_percentage": 28,
+    "context_window_size": 200000,
+    "current_usage": {
+      "input_tokens": 1200,
+      "cache_creation_input_tokens": 4800,
+      "cache_read_input_tokens": 50000
+    }
+  },
+  "prompt_cache": { "expires_at": 1778600000 },
   "model": { "id": "claude-sonnet-4-6", "display_name": "Sonnet 4.6" },
   "rate_limits": {
     "five_hour": { "used_percentage": 63, "resets_at": 1778602800 },
@@ -50,7 +60,20 @@ Claude Code sends this JSON on stdin every `refreshInterval` seconds:
 }
 ```
 
-`rate_limits` is only present for Claude Max subscribers. The combined script gracefully omits those bars when absent.
+`rate_limits` is only present for Claude Max subscribers. The combined script gracefully omits those bars when absent. `prompt_cache.expires_at` and `rate_limits.*.resets_at` are epoch seconds.
+
+### What the combined status line shows
+
+Beyond the ctx/5h/7d bars and the model name:
+
+- **ctx line**: tokens used / window (`56k/200k`; used = sum of the three `current_usage` fields, else derived from `used_percentage`), a sparkline of context size at the end of each of the last 12 turns, and the last turn's delta (`+3.2k`).
+- **model line**: prompt-cache countdown (`cache 47m`), yellow under 10 min, `cache COLD` in red once expired.
+- **5h / 7d bars**: show 0% once their `resets_at` has passed.
+- The ctx and model lines fall back to a narrower variant (dropping the extras) when the terminal is too narrow.
+
+### Context history (`hooks/ctx-turn.sh`)
+
+Stop hook that writes a turn-end marker so the status line records one context sample per turn. Per-session state lives in `${XDG_STATE_HOME:-~/.local/state}/claude-ctx-history/`: `turn.<session_id>` (marker, written by the hook) and `hist.<session_id>.json` (samples, written by `combined-status.sh`). The hook prunes files older than 7 days. It must be registered under `Stop` in `~/.claude/settings.json`, otherwise the sparkline does not advance.
 
 ## Key files to know
 
@@ -62,6 +85,7 @@ Claude Code sends this JSON on stdin every `refreshInterval` seconds:
 | `statusline/combined-status.sh` | Merges ctx/5h/7d/model bars into buddy art output |
 | `statusline/buddy-status.sh` | Pure buddy art renderer — keep untouched for upstream PRs |
 | `hooks/buddy-comment.sh` | Extracts `<!-- buddy: ... -->` from Stop hook, writes to status |
+| `hooks/ctx-turn.sh` | Stop hook — writes the turn-end marker for the ctx sparkline |
 
 ## State directory
 
