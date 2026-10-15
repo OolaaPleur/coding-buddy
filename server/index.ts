@@ -112,7 +112,8 @@ function getInstructions(): string {
     `- Same variable renamed multiple times → "Update all the references too."`,
     `Only suggest when you have something specific and actionable to say. Don't be annoying.`,
     ``,
-    `END-OF-TURN: At the very end of EVERY response, call the buddy_react tool`,
+    `END-OF-TURN: In EVERY response, call the buddy_react tool right BEFORE your final reply text`,
+    `(never as the last action — a turn that ends on a tool call makes Claude Code re-ask for output and the answer gets duplicated),`,
     `with a short in-character comment from ${companion.name} about what just happened.`,
     `Reference something SPECIFIC from this turn — a pitfall, a compliment, a warning, a pattern.`,
     `1 short sentence. Use *asterisks* for physical actions. Lean into ${companion.bones.peak}.`,
@@ -300,7 +301,7 @@ server.tool(
 
 server.tool(
   "buddy_react",
-  "Post a buddy comment that the user will see ONLY in the statusline speech bubble. Call this at the END of every response with a short in-character comment from the companion about what just happened. The comment should be 1 sentence, in character, and reference something specific from the conversation — a pitfall noticed, a compliment on clean code, a warning about edge cases, etc. Write the comment yourself based on the companion's personality. The tool call is a silent side effect: do not narrate, echo, or quote the result — the user never reads this reply text, the speech bubble is the only place the reaction appears.",
+  "Post a buddy comment that the user will see ONLY in the statusline speech bubble. Call this in every response right BEFORE your final reply text (never as the last action — a turn ending on a tool call makes Claude Code re-ask for output and the answer gets duplicated) with a short in-character comment from the companion about what just happened. The comment should be 1 sentence, in character, and reference something specific from the conversation — a pitfall noticed, a compliment on clean code, a warning about edge cases, etc. Write the comment yourself based on the companion's personality. The tool call is a silent side effect: do not narrate, echo, or quote the result — the user never reads this reply text, the speech bubble is the only place the reaction appears.",
   {
     comment: z
       .string()
@@ -1354,7 +1355,7 @@ server.resource(
       "",
       "## End-of-response buddy reaction",
       "",
-      `At the very end of EVERY response, after your full answer, call the buddy_react tool:`,
+      `In EVERY response, call the buddy_react tool right BEFORE your final reply text — never as the last action (a turn that ends on a tool call makes Claude Code re-ask for output and the answer gets duplicated):`,
       "",
       `\`\`\``,
       `buddy_react(comment: "...", reason: "turn")`,
