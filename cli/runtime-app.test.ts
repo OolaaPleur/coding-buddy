@@ -2,7 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { copyRuntimeApp, stableRuntimeAppDir, stableRuntimePaths } from "./runtime-app.ts";
+import {
+  copyRuntimeApp,
+  resolveRuntimeMode,
+  saveRuntimeMode,
+  stableRuntimeAppDir,
+  stableRuntimePaths,
+} from "./runtime-app.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -41,5 +47,43 @@ describe("stable runtime app", () => {
     expect(copyRuntimeApp(root, stateDir)).toBe(stableRuntimeAppDir(stateDir));
     expect(existsSync(stale)).toBe(false);
     expect(readFileSync(join(appDir, "statusline", "runtime.txt"), "utf8")).toBe("updated");
+  });
+});
+
+describe("runtime mode", () => {
+  function freshStateDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "coding-buddy-runtime-mode-"));
+    temporaryDirectories.push(dir);
+    return dir;
+  }
+
+  test("defaults to the upstream copy mode", () => {
+    expect(resolveRuntimeMode([], freshStateDir(), "/src/buddy")).toBe("copy");
+  });
+
+  test("explicit flags win over the saved marker", () => {
+    const stateDir = freshStateDir();
+    saveRuntimeMode(stateDir, "copy");
+    expect(resolveRuntimeMode(["--in-place"], stateDir, "/src/buddy")).toBe("in-place");
+    saveRuntimeMode(stateDir, "in-place");
+    expect(resolveRuntimeMode(["--copy"], stateDir, "/src/buddy")).toBe("copy");
+  });
+
+  test("a saved marker survives a flagless reinstall (upgrade)", () => {
+    const stateDir = freshStateDir();
+    saveRuntimeMode(stateDir, "in-place");
+    expect(resolveRuntimeMode([], stateDir, "/src/buddy")).toBe("in-place");
+  });
+
+  test("a registration already pointing at the working copy means in-place", () => {
+    const stateDir = freshStateDir();
+    expect(resolveRuntimeMode([], stateDir, "/src/buddy", "/src/buddy/")).toBe("in-place");
+    expect(resolveRuntimeMode([], stateDir, "/src/buddy", join(stateDir, "app"))).toBe("copy");
+  });
+
+  test("an unknown marker value is ignored", () => {
+    const stateDir = freshStateDir();
+    writeFileSync(join(stateDir, "runtime-mode"), "bogus\n");
+    expect(resolveRuntimeMode([], stateDir, "/src/buddy")).toBe("copy");
   });
 });

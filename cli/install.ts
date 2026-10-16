@@ -7,7 +7,7 @@
  * ~/.claude/ layout when the env var is unset.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync, rmSync } from "fs";
 import { execFileSync, execSync } from "child_process";
 import { resolve, dirname, join } from "path";
 
@@ -22,7 +22,14 @@ import {
 } from "../server/path.ts";
 import { loadCompanion, saveCompanion, resolveUserId, writeStatusState } from "../server/state.ts";
 import { generateFallbackName } from "../core/reactions.ts"
-import { copyRuntimeApp, stableRuntimePaths } from "./runtime-app.ts";
+import {
+  copyRuntimeApp,
+  resolveRuntimeMode,
+  saveRuntimeMode,
+  stableRuntimeAppDir,
+  stableRuntimePaths,
+  type RuntimeMode,
+} from "./runtime-app.ts";
 
 /** Recognise any buddy-owned hook command, however it is pathed. */
 function isBuddyHookCommand(command: unknown): boolean {
@@ -31,7 +38,7 @@ function isBuddyHookCommand(command: unknown): boolean {
     command.includes("coding-buddy") ||
     command.includes("claude-buddy") ||
     command.includes("buddy-state") ||
-    /\/(buddy-comment|suggest|react|mood-react|name-react|file-type-react)\.(sh|ts)\b/.test(command)
+    /\/(buddy-comment|suggest|react|mood-react|name-react|file-type-react|ctx-turn)\.(sh|ts)\b/.test(command)
   );
 }
 
@@ -202,6 +209,7 @@ function installHooks(settings: Record<string, any>, appDir: string) {
   const suggestHook   = join(hooksDir, "suggest.sh");
   const nameHook      = join(hooksDir, "name-react.sh");
   const moodHook      = join(hooksDir, "mood-react.sh");
+  const ctxTurnHook   = join(hooksDir, "ctx-turn.sh");
   const commandHook = (command: string) => ({
     type: "command",
     command: toUnixPath(command),
@@ -243,6 +251,11 @@ function installHooks(settings: Record<string, any>, appDir: string) {
   settings.hooks.Stop.push({
     hooks: [commandHook(suggestHook)],
   });
+  // Turn-end marker for the ctx sparkline in combined-status.sh; without it
+  // the per-turn history never advances.
+  settings.hooks.Stop.push({
+    hooks: [commandHook(ctxTurnHook)],
+  });
 
   // UserPromptSubmit: detect buddy's name in user message → instant status line
   // reaction, plus mood-react based on prompt content.
@@ -257,11 +270,34 @@ function installHooks(settings: Record<string, any>, appDir: string) {
     hooks: [commandHook(moodHook)],
   });
 
-  ok("Hooks registered: PostToolUse (Bash + Write/Edit) + Stop (comment + suggest) + UserPromptSubmit (name + mood)");
+  ok("Hooks registered: PostToolUse (Bash + Write/Edit) + Stop (comment + suggest + ctx-turn) + UserPromptSubmit (name + mood)");
 }
 
-function installRuntimeApp(): string {
-  const appDir = copyRuntimeApp(PROJECT_ROOT, buddyStateDir());
+function registeredMcpCwd(): string | undefined {
+  try {
+    const cwd = JSON.parse(readFileSync(CLAUDE_JSON_PATH, "utf8")).mcpServers?.["claude-buddy"]?.cwd;
+    return typeof cwd === "string" ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function installRuntimeApp(mode: RuntimeMode): string {
+  const stateDir = buddyStateDir();
+  saveRuntimeMode(stateDir, mode);
+
+  if (mode === "in-place") {
+    // Registrations point at the working copy; a leftover stable copy would
+    // only confuse `/buddy statusline on`, which prefers it when present.
+    rmSync(stableRuntimeAppDir(stateDir), { recursive: true, force: true });
+    if (!existsSync(join(PROJECT_ROOT, "node_modules"))) {
+      execFileSync("bun", ["install"], { cwd: PROJECT_ROOT, stdio: "ignore" });
+    }
+    ok(`Runtime: working copy, in place (${PROJECT_ROOT}) — a git pull is the deploy`);
+    return PROJECT_ROOT;
+  }
+
+  const appDir = copyRuntimeApp(PROJECT_ROOT, stateDir);
   const installArgs = ["install", "--production", "--ignore-scripts"];
   if (existsSync(join(appDir, "bun.lock"))) installArgs.push("--frozen-lockfile");
   execFileSync("bun", installArgs, { cwd: appDir, stdio: "ignore" });
@@ -336,7 +372,13 @@ console.log("");
 info("Installing coding-buddy...\n");
 
 const settings = loadSettings();
-const appDir = installRuntimeApp();
+const runtimeMode = resolveRuntimeMode(
+  process.argv.slice(2),
+  buddyStateDir(),
+  PROJECT_ROOT,
+  registeredMcpCwd(),
+);
+const appDir = installRuntimeApp(runtimeMode);
 
 installMcp(appDir);
 installSkill();

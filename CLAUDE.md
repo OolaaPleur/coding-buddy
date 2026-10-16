@@ -16,7 +16,10 @@ bun test              # run test suite
 bun run typecheck     # tsc --noEmit
 bun run server        # start MCP server manually
 bun run install-buddy # install / reinstall into current Claude Code profile
-bun run upgrade       # upgrade in place
+                      #   --in-place: run straight from this working copy (git pull = deploy)
+                      #   --copy: stable copy in <state>/app (upstream default)
+                      #   the choice is saved in <state>/runtime-mode, so upgrade keeps it
+bun run upgrade       # ff-pull origin, bun install, re-run install-buddy
 bun run uninstall     # remove from Claude Code profile
 bun run doctor        # diagnose install issues
 bun run show          # print buddy card to terminal
@@ -74,7 +77,7 @@ Beyond the ctx/5h/7d bars and the model name:
 
 ### Context history (`hooks/ctx-turn.sh`)
 
-Stop hook that writes a turn-end marker so the status line records one context sample per turn. Per-session state lives in `${XDG_STATE_HOME:-~/.local/state}/claude-ctx-history/`: `turn.<session_id>` (marker, written by the hook) and `hist.<session_id>.json` (samples, written by `combined-status.sh`). The hook prunes files older than 7 days. It must be registered under `Stop` in `~/.claude/settings.json`, otherwise the sparkline does not advance.
+Stop hook that writes a turn-end marker so the status line records one context sample per turn. Per-session state lives in `${XDG_STATE_HOME:-~/.local/state}/claude-ctx-history/`: `turn.<session_id>` (marker, written by the hook) and `hist.<session_id>.json` (samples, written by `combined-status.sh`). The hook prunes files older than 7 days. `install-buddy` registers it under `Stop` (since 2026-10-16); without it the sparkline does not advance.
 
 ## Key files to know
 

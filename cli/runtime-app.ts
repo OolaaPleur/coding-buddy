@@ -1,5 +1,42 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from "fs";
-import { join } from "path";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { join, resolve } from "path";
+
+/**
+ * Where the installer points Claude Code's registrations:
+ *  - "copy":     a stable copy in <state>/app (upstream default — editing or
+ *                pulling the working copy can't break running sessions);
+ *  - "in-place": the working copy itself, so a `git pull` is the deploy.
+ */
+export type RuntimeMode = "copy" | "in-place";
+
+/** Per-machine marker in the state dir, so `upgrade` keeps the chosen mode. */
+export const RUNTIME_MODE_FILE = "runtime-mode";
+
+/**
+ * Pick the mode: an explicit flag wins, then the saved marker, then an
+ * existing registration that already points at the working copy (machines
+ * wired by hand before the marker existed), else the upstream "copy" default.
+ */
+export function resolveRuntimeMode(
+  args: string[],
+  stateDir: string,
+  projectRoot: string,
+  registeredCwd?: string,
+): RuntimeMode {
+  if (args.includes("--in-place")) return "in-place";
+  if (args.includes("--copy")) return "copy";
+  try {
+    const saved = readFileSync(join(stateDir, RUNTIME_MODE_FILE), "utf8").trim();
+    if (saved === "in-place" || saved === "copy") return saved;
+  } catch { /* no marker yet */ }
+  if (registeredCwd && resolve(registeredCwd) === resolve(projectRoot)) return "in-place";
+  return "copy";
+}
+
+export function saveRuntimeMode(stateDir: string, mode: RuntimeMode): void {
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, RUNTIME_MODE_FILE), mode + "\n");
+}
 
 export const RUNTIME_DIRECTORIES = [
   "core",
