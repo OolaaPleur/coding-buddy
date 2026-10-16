@@ -72,19 +72,9 @@ Based on `$ARGUMENTS`:
 | `statusline basic`       | Call `buddy_statusline` with combined=false (buddy only, no rate-limit bars)                 |
 | `uninstall`              | Run the uninstall sequence (see **Uninstall Orchestration** below)                           |
 
-## CRITICAL OUTPUT RULES
+## Output
 
-The MCP tools return pre-formatted ASCII art with ANSI colors, box-drawing characters, stat bars, and species art. This is the companion's visual identity.
-
-**You MUST output the tool result text EXACTLY as returned — character for character, line for line.** Do NOT:
-
-- Summarize or paraphrase the ASCII art
-- Describe what the companion looks like in prose
-- Add commentary before or after the card
-- Reformat, rephrase, or interpret the output
-- Strip ANSI escape codes
-
-**Just output the raw text content from the tool result. Nothing else.** The ASCII art IS the response.
+The MCP tools return pre-formatted ASCII art with ANSI colors, box-drawing characters, stat bars, and species art. This is the companion's visual identity, so the tool result is the whole response: output its text exactly as returned, ANSI codes included, with nothing before or after it.
 
 If the user mentions the buddy's name in normal conversation, call `buddy_react` with reason "turn". Do NOT echo or quote the tool result — the reaction reaches the user only via the statusline speech bubble.
 

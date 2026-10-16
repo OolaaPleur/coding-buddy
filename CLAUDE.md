@@ -12,7 +12,7 @@ A coding companion for Claude Code — animated buddy in the status line, driven
 ## Commands
 
 ```bash
-bun test              # run test suite (56 tests, ~65 ms)
+bun test              # run test suite
 bun run typecheck     # tsc --noEmit
 bun run server        # start MCP server manually
 bun run install-buddy # install / reinstall into current Claude Code profile
@@ -90,7 +90,7 @@ Stop hook that writes a turn-end marker so the status line records one context s
 
 ## State directory
 
-Lives at `$BUDDY_STATE_DIR` (default: `~/.claude/buddy-state/`).  
+Lives at `$BUDDY_STATE_DIR` (default: `~/.claude-buddy/`; `$CLAUDE_CONFIG_DIR/buddy-state/` when `CLAUDE_CONFIG_DIR` is set).  
 Key file: `status.json` — written by MCP server, read by statusline bash script.
 
 ## Tests
