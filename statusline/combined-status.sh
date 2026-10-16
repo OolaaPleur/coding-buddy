@@ -121,7 +121,43 @@ except Exception:
 " 2>/dev/null)
 
 # ── Capture buddy art (buddy reads state files, not stdin) ───────────────────
-BUDDY_OUTPUT=$(printf '%s' "$STDIN_DATA" | "$BUDDY_SCRIPT" 2>/dev/null)
+# stars_below <buddy output>: move the rarity stars off the name line onto a
+# line of their own under it, so the widest row of the card is not
+# "Name [Lx] ★★★★" and the stars are not the first thing cut at the right
+# edge. Single-line (minimal) output is left alone. buddy-status.sh stays
+# untouched for upstream.
+stars_below() {
+printf '%s\n' "$1" | python3 -c "
+import re, sys, unicodedata
+ANSI = re.compile(r'\x1b\[[0-9;]*m')
+def width(t):
+    return sum(2 if unicodedata.east_asian_width(ch) in 'WF' else 1 for ch in ANSI.sub('', t))
+lines = sys.stdin.read().rstrip('\n').split('\n')
+# The name is the last segment of its line; on wide panels the bubble's bottom
+# border shares that line, so locate the name by visible column, not by string.
+pat = re.compile(r'(\x1b\[[0-9;]*m)?([^\x1b]*?) ([★☆]+)(\x1b\[0m)?$')
+if len(lines) > 1:
+    for i in range(len(lines) - 1, -1, -1):
+        m = pat.search(lines[i])
+        if not m:
+            continue
+        color, seg, stars, reset = m.group(1) or '', m.group(2), m.group(3), m.group(4) or ''
+        gap = re.search(r'.*(?:^| {2,})', seg)          # name has single spaces only
+        name = seg[gap.end():]
+        col = width(lines[i][:m.start(2)]) + width(seg[:gap.end()])
+        lines[i] = lines[i][:m.start(3) - 1] + reset
+        # 4 stars under an 11-column name can't sit dead centre; spaced out
+        # (7 columns) they can.
+        spaced = ' '.join(stars)
+        if (len(name) - len(stars)) % 2 and len(spaced) <= len(name) and (len(name) - len(spaced)) % 2 == 0:
+            stars = spaced
+        off = max(0, (len(name) - len(stars)) // 2)
+        lines.insert(i + 1, '⠀' + ' ' * (col + off - 1) + color + stars + reset)
+        break
+print('\n'.join(lines))
+"
+}
+BUDDY_OUTPUT=$(stars_below "$(printf '%s' "$STDIN_DATA" | "$BUDDY_SCRIPT" 2>/dev/null)")
 
 # No buddy output → exit silently (muted, no state, etc.)
 [ -z "$BUDDY_OUTPUT" ] && exit 0
@@ -393,7 +429,7 @@ print('\n'.join(out))
 # retry beside the compact one (no speech bubble), then show the stats alone.
 MERGED=$(merge_stats "$BUDDY_OUTPUT" merge)
 if [ $? -eq 3 ]; then
-    COMPACT_OUTPUT=$(printf '%s' "$STDIN_DATA" | BUDDY_STATUSLINE_DENSITY=compact "$BUDDY_SCRIPT" 2>/dev/null)
+    COMPACT_OUTPUT=$(stars_below "$(printf '%s' "$STDIN_DATA" | BUDDY_STATUSLINE_DENSITY=compact "$BUDDY_SCRIPT" 2>/dev/null)")
     MERGED=$(merge_stats "$COMPACT_OUTPUT" merge)
     [ $? -eq 3 ] && MERGED=$(merge_stats "$BUDDY_OUTPUT" stats)
 fi
