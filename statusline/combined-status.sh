@@ -154,7 +154,10 @@ if len(lines) > 1:
         off = max(0, (len(name) - len(stars)) // 2)
         lines.insert(i + 1, '⠀' + ' ' * (col + off - 1) + color + stars + reset)
         break
-print('\n'.join(lines))
+# The art rows keep the padding that matched the old 'Name ★★' width; with the
+# stars moved down it only pushes them into Claude Code's right margin (cut to …).
+trail = re.compile(r' +((?:\x1b\[[0-9;]*m)*)$')
+print('\n'.join(trail.sub(r'\1', l) for l in lines))
 "
 }
 BUDDY_OUTPUT=$(stars_below "$(printf '%s' "$STDIN_DATA" | "$BUDDY_SCRIPT" 2>/dev/null)")
